@@ -22,7 +22,7 @@ local Section = {}
 local Components = {}
 Library.Components = Components
 
-local SIDEBAR_W, TITLE_H = 176, 46
+local SIDEBAR_W, TITLE_H = 192, 52
 local FONT, FONT_M, FONT_B = Enum.Font.Gotham, Enum.Font.GothamMedium, Enum.Font.GothamBold
 local LEFT, RIGHT, CENTER = Enum.TextXAlignment.Left, Enum.TextXAlignment.Right, Enum.TextXAlignment.Center
 local AUTO_Y = Enum.AutomaticSize.Y
@@ -30,10 +30,10 @@ local AUTO_Y = Enum.AutomaticSize.Y
 --// Themes -------------------------------------------------------------------------------------
 local Themes = {
 	Dark = {
-		Background = Color3.fromRGB(18, 18, 24), Sidebar = Color3.fromRGB(14, 14, 19),
-		Surface = Color3.fromRGB(24, 24, 32), Surface2 = Color3.fromRGB(31, 31, 42),
-		Hover = Color3.fromRGB(40, 40, 54), Stroke = Color3.fromRGB(46, 46, 62),
-		Text = Color3.fromRGB(240, 240, 248), SubText = Color3.fromRGB(152, 152, 174),
+		Background = Color3.fromRGB(13, 13, 22), Sidebar = Color3.fromRGB(9, 9, 17),
+		Surface = Color3.fromRGB(20, 20, 33), Surface2 = Color3.fromRGB(28, 28, 46),
+		Hover = Color3.fromRGB(38, 37, 62), Stroke = Color3.fromRGB(44, 43, 70),
+		Text = Color3.fromRGB(243, 242, 253), SubText = Color3.fromRGB(139, 138, 173),
 	},
 	Midnight = {
 		Background = Color3.fromRGB(11, 14, 30), Sidebar = Color3.fromRGB(8, 10, 23),
@@ -293,6 +293,74 @@ function Library:_Icon(parent, icon, size, token, props)
 end
 
 --// Constructor --------------------------------------------------------------------------------
+-- Premium card: a CanvasGroup (fades as one unit) with a faint accent sheen. Returns card, stroke.
+function Library:_Card(props, radius)
+	props.BorderSizePixel = 0
+	props.BackgroundColor3 = self.Colors.Surface
+	local card = new("CanvasGroup", props)
+	self:Bind(card, { BackgroundColor3 = "Surface" })
+	corner(card, radius or 10)
+	local stroke = self:_Stroke(card, "Stroke")
+	local sheen = new("Frame", { Name = "Sheen", BackgroundColor3 = self.Colors.Accent, BorderSizePixel = 0, Size = UDim2.fromScale(1, 1), ZIndex = 0, Parent = card })
+	self:Bind(sheen, { BackgroundColor3 = "Accent" })
+	new("UIGradient", {
+		Rotation = 35,
+		Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.9), NumberSequenceKeypoint.new(0.6, 0.98), NumberSequenceKeypoint.new(1, 1) }),
+		Parent = sheen,
+	})
+	return card, stroke
+end
+
+-- Animated number counter for a TextLabel.
+function Library:CountTo(label, target, fmt)
+	fmt = fmt or function(n) return tostring(math.floor(n + 0.5)) end
+	local from = label:GetAttribute("count")
+	label:SetAttribute("count", target)
+	self._counters = self._counters or setmetatable({}, { __mode = "k" })
+	local prev = self._counters[label]
+	if prev then prev:Destroy() self._counters[label] = nil end
+	if from == nil or from == target or not self.Animations then
+		label.Text = fmt(target)
+		return
+	end
+	local nv = new("NumberValue", { Value = from })
+	self._counters[label] = nv
+	nv.Changed:Connect(function(v) label.Text = fmt(v) end)
+	local tw = TweenService:Create(nv, TweenInfo.new(0.7 / self.Speed, Enum.EasingStyle.Quint), { Value = target })
+	tw.Completed:Once(function()
+		label.Text = fmt(target)
+		if self._counters[label] == nv then self._counters[label] = nil end
+		nv:Destroy()
+	end)
+	tw:Play()
+end
+
+-- Staggered fade-in of the cards on a page.
+function Library:_Stagger(tab)
+	if not self.Animations then return end
+	local top = {}
+	for _, c in ipairs(tab.Scroll:GetChildren()) do
+		if c:IsA("CanvasGroup") or c.Name == "Stats" then table.insert(top, c) end
+	end
+	table.sort(top, function(a, b) return a.LayoutOrder < b.LayoutOrder end)
+	local list = {}
+	for _, c in ipairs(top) do
+		if c:IsA("CanvasGroup") then
+			table.insert(list, c)
+		else
+			for _, k in ipairs(c:GetChildren()) do
+				if k:IsA("CanvasGroup") then table.insert(list, k) end
+			end
+		end
+	end
+	for i, c in ipairs(list) do
+		c.GroupTransparency = 1
+		task.delay(math.min(i, 10) * 0.05 / self.Speed, function()
+			if c.Parent then self:Tween(c, { GroupTransparency = 0 }, 0.4) end
+		end)
+	end
+end
+
 function Library.new(opts)
 	opts = opts or {}
 	local self = setmetatable({}, Library)
@@ -311,6 +379,7 @@ function Library.new(opts)
 	self.Animations, self.Speed, self.UserScale = true, 1, 1
 	self.Visible, self.Minimized = false, false
 	self.Tabs, self._allTabs, self.Toggles, self.Flags, self.Activity = {}, {}, {}, {}, {}
+	self._events = {}
 	self._bound, self._themeHooks, self._conns, self._notifs = {}, {}, {}, {}
 	self._notifId, self._bindStamp, self._listening = 0, 0, false
 	self.UseLauncher = opts.Launcher
@@ -331,7 +400,7 @@ function Library.new(opts)
 	end)
 	task.spawn(function()
 		while self.Gui and self.Gui.Parent do
-			task.wait(20)
+			task.wait(8)
 			if self.Visible and self.Current == self.Home then self:_QueueHome() end
 		end
 	end)
@@ -414,18 +483,21 @@ function Library:_BuildGui(opts)
 	self:_Stroke(main, "Stroke")
 	self.Main = root
 	self.Canvas = main
+	local topGlow = new("Frame", { Name = "Glow", BackgroundColor3 = self.Colors.Accent, BorderSizePixel = 0, Size = UDim2.new(1, 0, 0, 240), Parent = main })
+	self:Bind(topGlow, { BackgroundColor3 = "Accent" })
+	new("UIGradient", { Rotation = 90, Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.84), NumberSequenceKeypoint.new(1, 1) }), Parent = topGlow })
 
 	-- Title bar
-	local title = self:_Frame({ Name = "TitleBar", Size = UDim2.new(1, 0, 0, TITLE_H), Parent = main }, "Sidebar")
+	local title = self:_Frame({ Name = "TitleBar", Size = UDim2.new(1, 0, 0, TITLE_H), BackgroundTransparency = 0.3, Parent = main }, "Sidebar")
 	self:_Frame({ Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), Parent = title }, "Stroke")
-	local logo = new("Frame", { Position = UDim2.fromOffset(14, 9), Size = UDim2.fromOffset(28, 28), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Parent = title })
+	local logo = new("Frame", { Position = UDim2.fromOffset(16, 12), Size = UDim2.fromOffset(28, 28), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Parent = title })
 	corner(logo, 8)
 	local lg = new("UIGradient", { Rotation = 45, Parent = logo })
 	self:Bind(lg, { Color = function(c) return ColorSequence.new(c.Accent, c.Accent2) end })
 	local logoIcon = self:_Icon(logo, opts.Icon or "diamond", 15, "Text", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5) })
 	self:Bind(logoIcon, { [logoIcon:IsA("ImageLabel") and "ImageColor3" or "TextColor3"] = function() return Color3.new(1, 1, 1) end })
-	self.NameLabel = self:_Text({ Text = self.Name, Font = FONT_B, TextSize = 14, Position = UDim2.fromOffset(52, 7), Size = UDim2.new(1, -150, 0, 18), TextTruncate = Enum.TextTruncate.AtEnd, Parent = title }, "Text")
-	self.SubLabel = self:_Text({ Text = self.Subtitle, TextSize = 11, Position = UDim2.fromOffset(52, 25), Size = UDim2.new(1, -150, 0, 14), TextTruncate = Enum.TextTruncate.AtEnd, Parent = title }, "SubText")
+	self.NameLabel = self:_Text({ Text = self.Name, Font = FONT_B, TextSize = 14, Position = UDim2.fromOffset(56, 9), Size = UDim2.new(1, -150, 0, 18), TextTruncate = Enum.TextTruncate.AtEnd, Parent = title }, "Text")
+	self.SubLabel = self:_Text({ Text = self.Subtitle, TextSize = 11, Position = UDim2.fromOffset(56, 28), Size = UDim2.new(1, -150, 0, 14), TextTruncate = Enum.TextTruncate.AtEnd, Parent = title }, "SubText")
 
 	local function titleButton(glyph, x, hoverToken)
 		local b = new("TextButton", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, x, 0.5, 0), Size = UDim2.fromOffset(28, 28), BackgroundColor3 = self.Colors.Hover, BackgroundTransparency = 1, BorderSizePixel = 0, Text = "", AutoButtonColor = false, Parent = title })
@@ -458,18 +530,30 @@ function Library:_BuildGui(opts)
 	local sidebar = self:_Frame({ Name = "Sidebar", Size = UDim2.new(0, SIDEBAR_W, 1, 0), Parent = body }, "Sidebar")
 	self:_Frame({ Size = UDim2.new(0, 1, 1, 0), Position = UDim2.new(1, -1, 0, 0), Parent = sidebar }, "Stroke")
 
-	local tabList = new("ScrollingFrame", { Name = "Tabs", BackgroundTransparency = 1, BorderSizePixel = 0, Position = UDim2.fromOffset(0, 8), Size = UDim2.new(1, 0, 1, -104), CanvasSize = UDim2.new(), AutomaticCanvasSize = AUTO_Y, ScrollBarThickness = 0, Parent = sidebar })
+	local tabList = new("ScrollingFrame", { Name = "Tabs", BackgroundTransparency = 1, BorderSizePixel = 0, Position = UDim2.fromOffset(0, 8), Size = UDim2.new(1, 0, 1, -178), CanvasSize = UDim2.new(), AutomaticCanvasSize = AUTO_Y, ScrollBarThickness = 0, Parent = sidebar })
 	padding(tabList, 0, 10, 0, 10)
 	listLayout(tabList, 4)
-	self:_Text({ Text = "NAVIGATION", Font = FONT_B, TextSize = 10, Size = UDim2.new(1, 0, 0, 22), LayoutOrder = -1, Parent = tabList }, "SubText")
+	self:_Text({ Text = "OVERVIEW", Font = FONT_B, TextSize = 11, Size = UDim2.new(1, 0, 0, 26), LayoutOrder = -1, Parent = tabList }, "SubText")
 	self.TabList = tabList
 
-	local footer = new("Frame", { BackgroundTransparency = 1, AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0, 94), Parent = sidebar })
+	local footer = new("Frame", { BackgroundTransparency = 1, AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0, 170), Parent = sidebar })
 	self:_Frame({ Position = UDim2.fromOffset(12, 0), Size = UDim2.new(1, -24, 0, 1), Parent = footer }, "Stroke")
-	local fl = new("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(0, 10), Size = UDim2.new(1, 0, 1, -10), Parent = footer })
+	local fl = new("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(0, 10), Size = UDim2.new(1, 0, 0, 84), Parent = footer })
 	padding(fl, 0, 10, 0, 10)
 	listLayout(fl, 4)
 	self.FooterList = fl
+
+	-- User card
+	local uc = self:_Card({ Name = "UserCard", Position = UDim2.fromOffset(10, 102), Size = UDim2.new(1, -20, 0, 56), Parent = footer }, 10)
+	local uid = LocalPlayer and LocalPlayer.UserId or 1
+	local avatar = new("ImageLabel", { Position = UDim2.fromOffset(11, 11), Size = UDim2.fromOffset(34, 34), BackgroundColor3 = self.Colors.Hover, BorderSizePixel = 0, Image = "rbxthumb://type=AvatarHeadShot&id=" .. uid .. "&w=100&h=100", Parent = uc })
+	self:Bind(avatar, { BackgroundColor3 = "Hover" })
+	corner(avatar, 17)
+	local dot = self:_Frame({ AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(42, 42), Size = UDim2.fromOffset(10, 10), Parent = uc }, "Success")
+	corner(dot, 5)
+	self:_Stroke(dot, "Surface", 2)
+	self.UserNameLabel = self:_Text({ Text = self.Username, Font = FONT_B, TextSize = 13, Position = UDim2.fromOffset(54, 11), Size = UDim2.new(1, -62, 0, 18), TextTruncate = Enum.TextTruncate.AtEnd, Parent = uc }, "Text")
+	self:_Text({ Text = "Online", TextSize = 11, Position = UDim2.fromOffset(54, 29), Size = UDim2.new(1, -62, 0, 14), Parent = uc }, "SubText")
 
 	self.Content = new("Frame", { Name = "Content", BackgroundTransparency = 1, Position = UDim2.fromOffset(SIDEBAR_W, 0), Size = UDim2.new(1, -SIDEBAR_W, 1, 0), ClipsDescendants = true, Parent = body })
 
@@ -576,6 +660,8 @@ end
 
 --// Activity log -------------------------------------------------------------------------------
 function Library:Log(text, kind)
+	table.insert(self._events, os.time())
+	if #self._events > 300 then table.remove(self._events, 1) end
 	table.insert(self.Activity, 1, { Text = text, Kind = kind or "Info", Time = os.time() })
 	if #self.Activity > 20 then table.remove(self.Activity) end
 	self:_QueueHome()
@@ -654,8 +740,10 @@ end
 function Library:_NewTab(opts, listParent, order, fixed)
 	local tab = setmetatable({ Library = self, Name = opts.Name or "Tab", Icon = opts.Icon or "dot", Fixed = fixed, _order = 1 }, Tab)
 
-	local btn = new("TextButton", { Name = tab.Name, Size = UDim2.new(1, 0, 0, 34), BackgroundColor3 = self.Colors.Hover, BackgroundTransparency = 1, BorderSizePixel = 0, Text = "", AutoButtonColor = false, LayoutOrder = order, Parent = listParent })
-	corner(btn, 7)
+	local btn = new("TextButton", { Name = tab.Name, Size = UDim2.new(1, 0, 0, 40), BackgroundColor3 = self.Colors.Hover, BackgroundTransparency = 1, BorderSizePixel = 0, Text = "", AutoButtonColor = false, LayoutOrder = order, Parent = listParent })
+	corner(btn, 8)
+	local pillStroke = self:_Stroke(btn, "Accent")
+	pillStroke.Transparency = 1
 	local bar = self:_Frame({ AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.fromScale(0, 0.5), Size = UDim2.fromOffset(3, 0), Parent = btn }, "Accent")
 	corner(bar, 2)
 	local icon = self:_Icon(btn, tab.Icon, 17, "SubText", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 14, 0.5, 0) })
@@ -676,9 +764,10 @@ function Library:_NewTab(opts, listParent, order, fixed)
 			if animate then self:Tween(inst, props, 0.18) else for k, v in pairs(props) do inst[k] = v end end
 		end
 		apply(btn, { BackgroundColor3 = bg, BackgroundTransparency = bgT })
-		apply(label, { TextColor3 = fg })
+		apply(label, { TextColor3 = fg, Position = UDim2.fromOffset((hovered or active) and 46 or 42, 0) })
+		apply(pillStroke, { Transparency = active and 0.55 or 1 })
 		apply(icon, { [colorProp] = fg })
-		apply(bar, { Size = UDim2.fromOffset(3, active and 18 or 0) })
+		apply(bar, { Size = UDim2.fromOffset(3, active and 20 or 0) })
 	end
 	tab._style = style
 	btn.MouseEnter:Connect(function() hovered = true style(true) end)
@@ -709,7 +798,13 @@ end
 
 function Library:CreateTab(opts)
 	if type(opts) == "string" then opts = { Name = opts } end
-	local tab = self:_NewTab(opts or {}, self.TabList, #self.Tabs + 1, false)
+	opts = opts or {}
+	local order = (#self.Tabs + 1) * 2
+	if opts.Group and opts.Group ~= self._lastGroup then
+		self._lastGroup = opts.Group
+		self:_Text({ Text = string.upper(opts.Group), Font = FONT_B, TextSize = 11, Size = UDim2.new(1, 0, 0, 28), LayoutOrder = order - 1, TextYAlignment = Enum.TextYAlignment.Bottom, Parent = self.TabList }, "SubText")
+	end
+	local tab = self:_NewTab(opts, self.TabList, order, false)
 	table.insert(self.Tabs, tab)
 	return tab
 end
@@ -734,6 +829,8 @@ function Library:SelectTab(target)
 	target.Page.Position = UDim2.fromOffset(0, dir)
 	self:Tween(target.Page, { GroupTransparency = 0, Position = UDim2.fromOffset(0, 0) }, 0.3)
 	target._style(true)
+	if target == self.Home and target._ui then target._ui.replay = true end
+	self:_Stagger(target)
 	self:_QueueHome()
 end
 
@@ -741,20 +838,19 @@ function Tab:Select() self.Library:SelectTab(self) end
 
 function Tab:CreateSection(name)
 	local lib = self.Library
-	local card = lib:_Frame({ Name = "Section", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AUTO_Y, LayoutOrder = self._order, Parent = self.Scroll }, "Surface")
+	local card = lib:_Card({ Name = "Section", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AUTO_Y, LayoutOrder = self._order, Parent = self.Scroll }, 10)
 	self._order += 1
-	corner(card, 8)
-	lib:_Stroke(card, "Stroke")
-	padding(card, 12, 12, 12, 12)
-	listLayout(card, 10)
+	local inner = new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AUTO_Y, Parent = card })
+	padding(inner, 16, 16, 16, 16)
+	listLayout(inner, 12)
 	if name and name ~= "" then
-		local head = new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 18), LayoutOrder = 0, Parent = card })
-		local pill = lib:_Frame({ Position = UDim2.fromOffset(0, 3), Size = UDim2.fromOffset(3, 12), Parent = head }, "Accent")
+		local head = new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 20), LayoutOrder = 0, Parent = inner })
+		local pill = lib:_Frame({ Position = UDim2.fromOffset(0, 3), Size = UDim2.fromOffset(4, 14), Parent = head }, "Accent")
 		corner(pill, 2)
-		lib:_Text({ Text = tostring(name), Font = FONT_B, TextSize = 13, Position = UDim2.fromOffset(10, 0), Size = UDim2.new(1, -10, 1, 0), Parent = head }, "Text")
+		lib:_Text({ Text = tostring(name), Font = FONT_B, TextSize = 14, Position = UDim2.fromOffset(12, 0), Size = UDim2.new(1, -12, 1, 0), Parent = head }, "Text")
 	end
-	local sbody = new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AUTO_Y, LayoutOrder = 1, Parent = card })
-	listLayout(sbody, 6)
+	local sbody = new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AUTO_Y, LayoutOrder = 1, Parent = inner })
+	listLayout(sbody, 8)
 	return setmetatable({ Library = lib, Tab = self, Card = card, Body = sbody, _order = 1 }, Section)
 end
 
@@ -793,9 +889,9 @@ local function baseRow(section, opts, controlWidth, click)
 	if click == "row" then row.Text = "" row.AutoButtonColor = false end
 	section._order += 1
 	lib:Bind(row, { BackgroundColor3 = "Surface2" })
-	corner(row, 6)
+	corner(row, 8)
 	local stroke = lib:_Stroke(row, "Stroke")
-	padding(row, 9, 12, 9, 12)
+	padding(row, 12, 14, 12, 14)
 	listLayout(row, 8)
 
 	local header = new(click == "header" and "TextButton" or "Frame", { BackgroundTransparency = 1, BorderSizePixel = 0, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AUTO_Y, LayoutOrder = 1, Parent = row })
@@ -837,6 +933,22 @@ local function fire(cb, ...)
 	if cb then task.spawn(cb, ...) end
 end
 
+-- Press feedback: content insets slightly (reads as a ~0.97 scale-down without breaking auto layout).
+local function pressInset(lib, row)
+	local pad = row:FindFirstChildOfClass("UIPadding")
+	if not pad then return end
+	local t, r, b, l = pad.PaddingTop.Offset, pad.PaddingRight.Offset, pad.PaddingBottom.Offset, pad.PaddingLeft.Offset
+	local function set(down)
+		lib:Tween(pad, {
+			PaddingTop = UDim.new(0, t + (down and 1 or 0)), PaddingBottom = UDim.new(0, b + (down and 1 or 0)),
+			PaddingLeft = UDim.new(0, l + (down and 4 or 0)), PaddingRight = UDim.new(0, r + (down and 4 or 0)),
+		}, 0.12, Enum.EasingStyle.Quad)
+	end
+	row.InputBegan:Connect(function(i) if isPress(i) then set(true) end end)
+	row.InputEnded:Connect(function(i) if isPress(i) then set(false) end end)
+	row.MouseLeave:Connect(function() set(false) end)
+end
+
 -- Reusable slider track. cfg: Min, Max, Increment, Default, OnRender(v), OnChange(v)
 local function buildSlider(lib, tab, parent, cfg)
 	local min, max = cfg.Min, cfg.Max
@@ -847,15 +959,17 @@ local function buildSlider(lib, tab, parent, cfg)
 	local dot = incText:find("%.")
 	if dot then decimals = #incText - dot end
 
-	local holder = new("TextButton", { BackgroundTransparency = 1, Text = "", AutoButtonColor = false, Size = UDim2.new(1, 0, 0, 18), Parent = parent })
-	local track = lib:_Frame({ AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.fromScale(0, 0.5), Size = UDim2.new(1, 0, 0, 6), Parent = holder }, "Stroke")
-	corner(track, 3)
+	local holder = new("TextButton", { BackgroundTransparency = 1, Text = "", AutoButtonColor = false, Size = UDim2.new(1, 0, 0, 22), Parent = parent })
+	local track = lib:_Frame({ AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.fromScale(0, 0.5), Size = UDim2.new(1, 0, 0, 8), Parent = holder }, "Stroke")
+	corner(track, 4)
 	local fill = new("Frame", { BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Size = UDim2.fromScale(0, 1), Parent = track })
-	corner(fill, 3)
+	corner(fill, 4)
+	local fglow = lib:_Stroke(fill, "Accent", 3)
+	fglow.Transparency = 0.72
 	local grad = new("UIGradient", { Parent = fill })
 	lib:Bind(grad, { Color = function(c) return ColorSequence.new(c.Accent, c.Accent2) end })
-	local knob = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0, 0.5), Size = UDim2.fromOffset(14, 14), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, ZIndex = 2, Parent = track })
-	corner(knob, 9)
+	local knob = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0, 0.5), Size = UDim2.fromOffset(16, 16), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, ZIndex = 2, Parent = track })
+	corner(knob, 8)
 	lib:_Stroke(knob, "Accent", 2)
 
 	local function snap(v)
@@ -868,6 +982,7 @@ local function buildSlider(lib, tab, parent, cfg)
 	local obj = { Holder = holder }
 	local function render(animate)
 		local a = max > min and (value - min) / (max - min) or 0
+		fglow.Enabled = a > 0.01
 		if animate then
 			lib:Tween(fill, { Size = UDim2.fromScale(a, 1) }, 0.1, Enum.EasingStyle.Quad)
 			lib:Tween(knob, { Position = UDim2.fromScale(a, 0.5) }, 0.1, Enum.EasingStyle.Quad)
@@ -896,7 +1011,7 @@ local function buildSlider(lib, tab, parent, cfg)
 		end
 		fromX(input.Position.X)
 		if tab and tab.Scroll then tab.Scroll.ScrollingEnabled = false end
-		lib:Tween(knob, { Size = UDim2.fromOffset(18, 18) }, 0.1)
+		lib:Tween(knob, { Size = UDim2.fromOffset(21, 21) }, 0.15, Enum.EasingStyle.Back)
 		local move, done
 		move = UserInputService.InputChanged:Connect(function(i)
 			if isMove(i) then fromX(i.Position.X) end
@@ -905,7 +1020,7 @@ local function buildSlider(lib, tab, parent, cfg)
 			if input.UserInputState == Enum.UserInputState.End then
 				move:Disconnect() done:Disconnect()
 				if tab and tab.Scroll then tab.Scroll.ScrollingEnabled = true end
-				lib:Tween(knob, { Size = UDim2.fromOffset(14, 14) }, 0.1)
+				lib:Tween(knob, { Size = UDim2.fromOffset(16, 16) }, 0.2, Enum.EasingStyle.Back)
 			end
 		end)
 	end)
@@ -915,17 +1030,44 @@ end
 --// Components ---------------------------------------------------------------------------------
 Components.Button = function(section, opts)
 	local lib = section.Library
-	local r = baseRow(section, opts, 20, "row")
-	lib:_Text({ Text = "›", Font = FONT_B, TextSize = 22, Size = UDim2.fromScale(1, 1), TextXAlignment = RIGHT, Parent = r.Control }, "Accent")
-	local row, hovered = r.Row, false
-	row.MouseEnter:Connect(function() hovered = true lib:Tween(row, { BackgroundColor3 = lib.Colors.Hover }, 0.15) end)
-	row.MouseLeave:Connect(function() hovered = false lib:Tween(row, { BackgroundColor3 = lib.Colors.Surface2 }, 0.2) end)
+	local r = baseRow(section, opts, 64, "row")
+	local row = r.Row
+	local pill = new("Frame", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.fromScale(1, 0.5), Size = UDim2.fromOffset(60, 26), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Parent = r.Control })
+	corner(pill, 13)
+	local grad = new("UIGradient", { Rotation = 0, Parent = pill })
+	lib:Bind(grad, { Color = function(c) return ColorSequence.new(c.Accent, c.Accent2) end })
+	local glow = lib:_Stroke(pill, "Accent", 2)
+	glow.Transparency = 1
+	local pillText = lib:_Text({ Text = opts.ButtonText or "Run", Font = FONT_B, TextSize = 12, Size = UDim2.fromScale(1, 1), TextXAlignment = CENTER, Parent = pill }, "Text")
+	lib:Bind(pillText, { TextColor3 = function() return Color3.new(1, 1, 1) end })
+	local pillScale = new("UIScale", { Parent = pill })
+	pressInset(lib, row)
+
+	local hovered = false
+	row.MouseEnter:Connect(function()
+		hovered = true
+		lib:Tween(row, { BackgroundColor3 = lib.Colors.Hover }, 0.15)
+		lib:Tween(r.Stroke, { Color = lib.Colors.Accent }, 0.2)
+		lib:Tween(glow, { Transparency = 0.5 }, 0.2)
+		lib:Tween(grad, { Offset = Vector2.new(-0.3, 0) }, 0.3)
+	end)
+	row.MouseLeave:Connect(function()
+		hovered = false
+		lib:Tween(row, { BackgroundColor3 = lib.Colors.Surface2 }, 0.2)
+		lib:Tween(r.Stroke, { Color = lib.Colors.Stroke }, 0.2)
+		lib:Tween(glow, { Transparency = 1 }, 0.2)
+		lib:Tween(grad, { Offset = Vector2.new(0, 0) }, 0.3)
+	end)
+	row.InputBegan:Connect(function(i) if isPress(i) then lib:Tween(pillScale, { Scale = 0.93 }, 0.1, Enum.EasingStyle.Quad) end end)
+	row.InputEnded:Connect(function(i) if isPress(i) then lib:Tween(pillScale, { Scale = 1 }, 0.35, Enum.EasingStyle.Back) end end)
+
 	local obj = {}
 	function obj:Fire() fire(opts.Callback) end
 	function obj:SetText(t) r.Title.Text = t end
 	row.Activated:Connect(function()
-		lib:Tween(row, { BackgroundColor3 = lib.Colors.Accent }, 0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, function()
-			lib:Tween(row, { BackgroundColor3 = hovered and lib.Colors.Hover or lib.Colors.Surface2 }, 0.3)
+		local soft = lib.Colors.Surface2:Lerp(lib.Colors.Accent, 0.35)
+		lib:Tween(row, { BackgroundColor3 = soft }, 0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, function()
+			lib:Tween(row, { BackgroundColor3 = hovered and lib.Colors.Hover or lib.Colors.Surface2 }, 0.35)
 		end)
 		lib:Log('Pressed "' .. r.Title.Text .. '"', "Info")
 		obj:Fire()
@@ -936,20 +1078,28 @@ end
 Components.Toggle = function(section, opts)
 	local lib = section.Library
 	local value = opts.Default == true
-	local r = baseRow(section, opts, 42, "row")
-	local track = new("Frame", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.fromScale(1, 0.5), Size = UDim2.fromOffset(40, 22), BorderSizePixel = 0, Parent = r.Control })
-	corner(track, 11)
-	local knob = new("Frame", { AnchorPoint = Vector2.new(0, 0.5), Size = UDim2.fromOffset(16, 16), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Parent = track })
-	corner(knob, 8)
+	local r = baseRow(section, opts, 46, "row")
+	local row = r.Row
+	local track = new("Frame", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.fromScale(1, 0.5), Size = UDim2.fromOffset(44, 24), BorderSizePixel = 0, Parent = r.Control })
+	corner(track, 12)
+	local glow = lib:_Stroke(track, "Accent", 2)
+	local knob = new("Frame", { AnchorPoint = Vector2.new(0, 0.5), Size = UDim2.fromOffset(18, 18), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Parent = track })
+	corner(knob, 9)
 	lib:Bind(track, { BackgroundColor3 = function(c) return value and c.Accent or c.Stroke end })
 	local function render(animate)
-		local pos = UDim2.new(0, value and 21 or 3, 0.5, 0)
+		local pos = UDim2.new(0, value and 23 or 3, 0.5, 0)
 		local col = value and lib.Colors.Accent or lib.Colors.Stroke
+		local gt = value and 0.55 or 1
 		if animate then
-			lib:Tween(track, { BackgroundColor3 = col }, 0.2)
-			lib:Tween(knob, { Position = pos }, 0.2)
+			lib:Tween(track, { BackgroundColor3 = col }, 0.25)
+			lib:Tween(glow, { Transparency = gt }, 0.25)
+			lib:Tween(knob, { Position = pos }, 0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+			lib:Tween(knob, { Size = UDim2.fromOffset(24, 18) }, 0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, function()
+				lib:Tween(knob, { Size = UDim2.fromOffset(18, 18) }, 0.3, Enum.EasingStyle.Back)
+			end)
 		else
 			track.BackgroundColor3 = col
+			glow.Transparency = gt
 			knob.Position = pos
 		end
 	end
@@ -973,9 +1123,18 @@ Components.Toggle = function(section, opts)
 	end
 	table.insert(lib.Toggles, obj)
 
-	local row, hovered = r.Row, false
-	row.MouseEnter:Connect(function() hovered = true lib:Tween(row, { BackgroundColor3 = lib.Colors.Hover }, 0.15) end)
-	row.MouseLeave:Connect(function() hovered = false lib:Tween(row, { BackgroundColor3 = lib.Colors.Surface2 }, 0.2) end)
+	pressInset(lib, row)
+	local hovered = false
+	row.MouseEnter:Connect(function()
+		hovered = true
+		lib:Tween(row, { BackgroundColor3 = lib.Colors.Hover }, 0.15)
+		lib:Tween(r.Stroke, { Color = lib.Colors.Accent }, 0.2)
+	end)
+	row.MouseLeave:Connect(function()
+		hovered = false
+		lib:Tween(row, { BackgroundColor3 = lib.Colors.Surface2 }, 0.2)
+		lib:Tween(r.Stroke, { Color = lib.Colors.Stroke }, 0.2)
+	end)
 	row.Activated:Connect(function()
 		obj:Set(not value)
 		lib:Log(r.Title.Text .. (value and " enabled" or " disabled"), value and "Success" or "Warning")
@@ -1011,7 +1170,7 @@ Components.Dropdown = function(section, opts)
 	local r = baseRow(section, opts, 150, "header")
 
 	local chip = lib:_Frame({ Size = UDim2.fromScale(1, 1), Parent = r.Control }, "Background")
-	corner(chip, 5)
+	corner(chip, 8)
 	lib:_Stroke(chip, "Stroke")
 	local chipText = lib:_Text({ TextSize = 12, Position = UDim2.fromOffset(8, 0), Size = UDim2.new(1, -28, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd, Parent = chip }, "Text")
 	local arrow = lib:_Text({ Text = "▾", TextSize = 13, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(1, -12, 0.5, 0), Size = UDim2.fromOffset(18, 18), TextXAlignment = CENTER, Parent = chip }, "SubText")
@@ -1023,7 +1182,7 @@ Components.Dropdown = function(section, opts)
 	if searchable then
 		searchBox = new("TextBox", { BorderSizePixel = 0, BackgroundColor3 = lib.Colors.Background, Size = UDim2.new(1, 0, 0, 26), LayoutOrder = 1, Font = FONT, TextSize = 12, TextXAlignment = LEFT, PlaceholderText = "Search...", Text = "", ClearTextOnFocus = false, Parent = drawer })
 		lib:Bind(searchBox, { BackgroundColor3 = "Background", TextColor3 = "Text", PlaceholderColor3 = "SubText" })
-		corner(searchBox, 5)
+		corner(searchBox, 8)
 		padding(searchBox, 0, 8, 0, 8)
 		lib:_Stroke(searchBox, "Stroke")
 	end
@@ -1078,7 +1237,7 @@ Components.Dropdown = function(section, opts)
 		entries = {}
 		for i, name in ipairs(values) do
 			local btn = new("TextButton", { BackgroundColor3 = lib.Colors.Accent, BackgroundTransparency = 1, BorderSizePixel = 0, Text = "", AutoButtonColor = false, Size = UDim2.new(1, 0, 0, 26), LayoutOrder = i, Parent = list })
-			corner(btn, 5)
+			corner(btn, 8)
 			local label = lib:_Text({ Text = tostring(name), Position = UDim2.fromOffset(10, 0), Size = UDim2.new(1, -34, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd, Parent = btn }, "Text")
 			lib:Unbind(label)
 			local check = lib:_Text({ Text = "✓", Font = FONT_B, Position = UDim2.new(1, -24, 0, 0), Size = UDim2.fromOffset(18, 26), TextXAlignment = CENTER, Visible = false, Parent = btn }, "Accent")
@@ -1145,7 +1304,7 @@ Components.Textbox = function(section, opts)
 	local r = baseRow(section, opts, 160)
 	local box = new("TextBox", { BorderSizePixel = 0, BackgroundColor3 = lib.Colors.Background, Size = UDim2.fromScale(1, 1), Font = FONT, TextSize = 12, TextXAlignment = LEFT, ClearTextOnFocus = false, Text = opts.Default or "", PlaceholderText = opts.Placeholder or "Type here...", TextTruncate = Enum.TextTruncate.AtEnd, Parent = r.Control })
 	lib:Bind(box, { BackgroundColor3 = "Background", TextColor3 = "Text", PlaceholderColor3 = "SubText" })
-	corner(box, 5)
+	corner(box, 8)
 	padding(box, 0, 8, 0, 8)
 	local stroke = lib:_Stroke(box, "Stroke")
 	local last = box.Text
@@ -1202,7 +1361,7 @@ Components.Keybind = function(section, opts)
 	local r = baseRow(section, opts, 140)
 	local chip = new("TextButton", { BorderSizePixel = 0, BackgroundColor3 = lib.Colors.Background, Size = UDim2.fromScale(1, 1), Font = FONT_M, TextSize = 11, AutoButtonColor = false, Text = "", TextTruncate = Enum.TextTruncate.AtEnd, Parent = r.Control })
 	lib:Bind(chip, { BackgroundColor3 = "Background" })
-	corner(chip, 5)
+	corner(chip, 8)
 	local stroke = lib:_Stroke(chip, "Stroke")
 	local listening, state = false, false
 	local conns = {}
@@ -1314,7 +1473,7 @@ Components.ColorPicker = function(section, opts)
 	local rgb = { math.floor(color.R * 255 + 0.5), math.floor(color.G * 255 + 0.5), math.floor(color.B * 255 + 0.5) }
 	local r = baseRow(section, opts, 40, "header")
 	local swatch = new("Frame", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.fromScale(1, 0.5), Size = UDim2.fromOffset(36, 20), BorderSizePixel = 0, BackgroundColor3 = color, Parent = r.Control })
-	corner(swatch, 5)
+	corner(swatch, 8)
 	lib:_Stroke(swatch, "Stroke")
 
 	local drawer = new("Frame", { BackgroundTransparency = 1, ClipsDescendants = true, Size = UDim2.new(1, 0, 0, 0), Parent = r.Extra })
@@ -1357,11 +1516,11 @@ Components.ColorPicker = function(section, opts)
 	local hexRow = new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 26), LayoutOrder = 4, Parent = drawer })
 	hexBox = new("TextBox", { BorderSizePixel = 0, BackgroundColor3 = lib.Colors.Background, Size = UDim2.new(0, 110, 1, 0), Font = FONT, TextSize = 12, TextXAlignment = LEFT, ClearTextOnFocus = false, Text = hexOf(color), PlaceholderText = "#RRGGBB", Parent = hexRow })
 	lib:Bind(hexBox, { BackgroundColor3 = "Background", TextColor3 = "Text", PlaceholderColor3 = "SubText" })
-	corner(hexBox, 5)
+	corner(hexBox, 8)
 	padding(hexBox, 0, 8, 0, 8)
 	local hexStroke = lib:_Stroke(hexBox, "Stroke")
 	preview = new("Frame", { Position = UDim2.fromOffset(118, 0), Size = UDim2.new(1, -118, 1, 0), BorderSizePixel = 0, BackgroundColor3 = color, Parent = hexRow })
-	corner(preview, 5)
+	corner(preview, 8)
 	lib:_Stroke(preview, "Stroke")
 	hexBox.FocusLost:Connect(function()
 		local c = colorFromHex(hexBox.Text)
@@ -1446,7 +1605,22 @@ function Library:_BuildSettings()
 
 	local ap = tab:CreateSection("Appearance")
 	ap:CreateDropdown({ Name = "Theme", Description = "Choose a color theme.", Values = ThemeNames, Default = self.ThemeName, Search = false, Flag = "Lumen.Theme", Callback = function(v) if v then self:SetTheme(v) end end })
-	ap:CreateColorPicker({ Name = "Accent Color", Description = "Highlight color used across the interface.", Default = self.Accent, Flag = "Lumen.Accent", Callback = function(c) self:SetAccent(c) end })
+	local accentPicker = ap:CreateColorPicker({ Name = "Accent Color", Description = "Highlight color used across the interface.", Default = self.Accent, Flag = "Lumen.Accent", Callback = function(c) self:SetAccent(c) end })
+	local presets = { Color3.fromRGB(124, 92, 255), Color3.fromRGB(56, 189, 248), Color3.fromRGB(244, 114, 182), Color3.fromRGB(52, 211, 153), Color3.fromRGB(251, 146, 60), Color3.fromRGB(248, 113, 113) }
+	local pr = baseRow(ap, { Name = "Accent Presets", Description = "One-tap palette." }, #presets * 22 + (#presets - 1) * 6)
+	listLayout(pr.Control, 6, true).VerticalAlignment = Enum.VerticalAlignment.Center
+	for i, col in ipairs(presets) do
+		local sw = new("TextButton", { Size = UDim2.fromOffset(22, 22), BackgroundColor3 = col, BorderSizePixel = 0, Text = "", AutoButtonColor = false, LayoutOrder = i, Parent = pr.Control })
+		corner(sw, 11)
+		local lib_stroke = self:_Stroke(sw, "Text")
+		lib_stroke.Transparency = 0.8
+		sw.MouseEnter:Connect(function() self:Tween(lib_stroke, { Transparency = 0.1 }, 0.12) end)
+		sw.MouseLeave:Connect(function() self:Tween(lib_stroke, { Transparency = 0.8 }, 0.15) end)
+		sw.Activated:Connect(function()
+			self:SetAccent(col)
+			accentPicker:Set(col, true)
+		end)
+	end
 	ap:CreateSlider({ Name = "UI Scale", Description = "Scales the whole window. Auto-fits small screens.", Min = 0.7, Max = 1.3, Increment = 0.05, Default = 1, Flag = "Lumen.Scale", Callback = function(v)
 		self.UserScale = v
 		self:_UpdateScale(true)
@@ -1515,47 +1689,52 @@ function Library:CreateHome(opts)
 	if opts.Description then self.Description = opts.Description end
 	if opts.Developer then self.Developer = opts.Developer end
 	if opts.Credits then self.Credits = opts.Credits end
+	local function white() return Color3.new(1, 1, 1) end
 
 	local tab = self:_NewTab({ Name = "Home", Icon = "home", NoHeader = true }, self.TabList, 0, false)
 	self.Home = tab
-	local ui = {}
+	local ui = { bars = {} }
 	tab._ui = ui
 
-	-- Hero banner
-	local hero = new("Frame", { Name = "Hero", Size = UDim2.new(1, 0, 0, 132), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, LayoutOrder = 1, Parent = tab.Scroll })
-	corner(hero, 12)
-	local hg = new("UIGradient", { Rotation = 25, Parent = hero })
+	-- Hero ---------------------------------------------------------------------------------------
+	local heroWrap = new("CanvasGroup", { Name = "Hero", BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 148), LayoutOrder = 1, Parent = tab.Scroll })
+	corner(heroWrap, 12)
+	local hero = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Parent = heroWrap })
+	local hg = new("UIGradient", { Rotation = 20, Parent = hero })
 	self:Bind(hg, { Color = function(c) return ColorSequence.new(c.Accent, c.Accent2) end })
-	for _, d in ipairs({ { 120, 0.86, 0.5, 0.9 }, { 64, 0.72, 0.8, 0.92 } }) do
+	local shade = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0), BorderSizePixel = 0, Parent = hero })
+	new("UIGradient", { Rotation = 90, Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(1, 0.55) }), Parent = shade })
+	for _, d in ipairs({ { 150, 0.88, 0.45, 0.9 }, { 84, 0.74, 0.86, 0.92 }, { 44, 0.97, 0.9, 0.88 } }) do
 		local circle = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(d[2], d[3]), Size = UDim2.fromOffset(d[1], d[1]), BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = d[4], BorderSizePixel = 0, Parent = hero })
 		corner(circle, d[1])
 	end
-	local white = function() return Color3.new(1, 1, 1) end
-	local g1 = self:_Text({ Text = "Welcome back,", TextSize = 12, Position = UDim2.fromOffset(22, 16), Size = UDim2.new(1, -44, 0, 14), Parent = hero }, "Text")
+	local ring = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.88, 0.45), Size = UDim2.fromOffset(200, 200), BackgroundTransparency = 1, Parent = hero })
+	corner(ring, 100)
+	new("UIStroke", { Color = Color3.new(1, 1, 1), Transparency = 0.85, Thickness = 1.5, Parent = ring })
+	local g1 = self:_Text({ Text = "Welcome back,", TextSize = 12, Position = UDim2.fromOffset(24, 18), Size = UDim2.new(1, -48, 0, 16), Parent = hero }, "Text")
+	ui.Username = self:_Text({ Text = self.Username, Font = FONT_B, TextSize = 30, Position = UDim2.fromOffset(24, 34), Size = UDim2.new(1, -48, 0, 38), TextTruncate = Enum.TextTruncate.AtEnd, Parent = hero }, "Text")
+	ui.Desc = self:_Text({ Text = self.Description, TextSize = 13, Position = UDim2.fromOffset(24, 76), Size = UDim2.new(0.6, 0, 0, 34), TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, Parent = hero }, "Text")
+	local pill = new("Frame", { Position = UDim2.fromOffset(24, 116), Size = UDim2.fromOffset(0, 22), AutomaticSize = Enum.AutomaticSize.X, BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 0.55, BorderSizePixel = 0, Parent = hero })
+	corner(pill, 11)
+	padding(pill, 0, 12, 0, 12)
+	local pl = self:_Text({ Text = self.Name .. "  ·  v" .. self.Version, Font = FONT_M, TextSize = 11, Size = UDim2.fromOffset(0, 22), AutomaticSize = Enum.AutomaticSize.X, Parent = pill }, "Text")
+	for _, l in ipairs({ g1, ui.Username, ui.Desc, pl }) do self:Bind(l, { TextColor3 = white }) end
 	g1.TextTransparency = 0.2
-	ui.Username = self:_Text({ Text = self.Username, Font = FONT_B, TextSize = 28, Position = UDim2.fromOffset(22, 30), Size = UDim2.new(1, -44, 0, 36), TextTruncate = Enum.TextTruncate.AtEnd, Parent = hero }, "Text")
-	ui.Desc = self:_Text({ Text = self.Description, TextSize = 13, Position = UDim2.fromOffset(22, 68), Size = UDim2.new(0.65, 0, 0, 32), TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, Parent = hero }, "Text")
 	ui.Desc.TextTransparency = 0.12
-	local pill = new("Frame", { Position = UDim2.fromOffset(22, 104), Size = UDim2.fromOffset(0, 20), AutomaticSize = Enum.AutomaticSize.X, BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 0.6, BorderSizePixel = 0, Parent = hero })
-	corner(pill, 10)
-	padding(pill, 0, 10, 0, 10)
-	local pl = self:_Text({ Text = self.Name .. "  ·  v" .. self.Version, Font = FONT_M, TextSize = 11, Size = UDim2.fromOffset(0, 20), AutomaticSize = Enum.AutomaticSize.X, Parent = pill }, "Text")
-	for _, l in ipairs({ g1, ui.Username, ui.Desc, pl }) do
-		self:Bind(l, { TextColor3 = white })
-	end
 
-	-- Status cards
-	local statsFrame = new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AUTO_Y, LayoutOrder = 2, Parent = tab.Scroll })
-	local grid = new("UIGridLayout", { CellPadding = UDim2.fromOffset(8, 8), CellSize = UDim2.new(0.25, -6, 0, 76), SortOrder = Enum.SortOrder.LayoutOrder, Parent = statsFrame })
-	local function statCard(order, icon, labelText)
-		local card = self:_Frame({ LayoutOrder = order, Parent = statsFrame }, "Surface")
-		corner(card, 8)
-		self:_Stroke(card, "Stroke")
-		local badge = self:_Frame({ Position = UDim2.fromOffset(12, 12), Size = UDim2.fromOffset(26, 26), BackgroundTransparency = 0.85, Parent = card }, "Accent")
-		corner(badge, 13)
-		self:_Icon(badge, icon, 13, "Accent", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5) })
-		self:_Text({ Text = labelText, Font = FONT_B, TextSize = 10, Position = UDim2.fromOffset(46, 12), Size = UDim2.new(1, -52, 0, 26), Parent = card }, "SubText")
-		return self:_Text({ Text = "-", Font = FONT_B, TextSize = 16, Position = UDim2.fromOffset(12, 44), Size = UDim2.new(1, -24, 0, 22), TextTruncate = Enum.TextTruncate.AtEnd, Parent = card }, "Text")
+	-- Stat cards ---------------------------------------------------------------------------------
+	local statsFrame = new("Frame", { Name = "Stats", BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AUTO_Y, LayoutOrder = 2, Parent = tab.Scroll })
+	local grid = new("UIGridLayout", { CellPadding = UDim2.fromOffset(8, 8), CellSize = UDim2.new(0.25, -6, 0, 84), SortOrder = Enum.SortOrder.LayoutOrder, Parent = statsFrame })
+	local function statCard(order, icon, caption)
+		local card, stroke = self:_Card({ LayoutOrder = order, Parent = statsFrame }, 10)
+		local badge = self:_Frame({ Position = UDim2.fromOffset(14, 14), Size = UDim2.fromOffset(28, 28), BackgroundTransparency = 0.82, Parent = card }, "Accent")
+		corner(badge, 14)
+		self:_Icon(badge, icon, 14, "Accent", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5) })
+		self:_Text({ Text = caption, Font = FONT_B, TextSize = 11, Position = UDim2.fromOffset(50, 14), Size = UDim2.new(1, -56, 0, 28), TextTruncate = Enum.TextTruncate.AtEnd, Parent = card }, "SubText")
+		local val = self:_Text({ Text = "-", Font = FONT_B, TextSize = 18, Position = UDim2.fromOffset(14, 50), Size = UDim2.new(1, -28, 0, 24), TextTruncate = Enum.TextTruncate.AtEnd, Parent = card }, "Text")
+		card.MouseEnter:Connect(function() self:Tween(stroke, { Color = self.Colors.Accent }, 0.2) end)
+		card.MouseLeave:Connect(function() self:Tween(stroke, { Color = self.Colors.Stroke }, 0.25) end)
+		return val
 	end
 	ui.Theme = statCard(1, "sparkle", "THEME")
 	ui.Tabs = statCard(2, "list", "TABS")
@@ -1564,29 +1743,54 @@ function Library:CreateHome(opts)
 	local function updateGrid()
 		local w = tab.Scroll.AbsoluteSize.X / math.max(self.Scale.Scale, 0.01)
 		local cols = w < 540 and 2 or 4
-		grid.CellSize = UDim2.new(1 / cols, -(8 * (cols - 1)) / cols, 0, 76)
+		grid.CellSize = UDim2.new(1 / cols, -(8 * (cols - 1)) / cols, 0, 84)
 	end
 	tab.Scroll:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateGrid)
 	updateGrid()
 
-	-- Quick navigation
+	-- Chart --------------------------------------------------------------------------------------
+	local chartSec = tab:CreateSection("Interaction activity")
+	local top = new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 32), LayoutOrder = 1, Parent = chartSec.Body })
+	ui.ChartTotal = self:_Text({ Text = "0", Font = FONT_B, TextSize = 26, Size = UDim2.new(0.4, 0, 1, 0), Parent = top }, "Text")
+	self:_Text({ Text = "interactions · last 2 minutes", TextSize = 11, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.fromScale(1, 0.5), Size = UDim2.new(0.6, 0, 1, 0), TextXAlignment = RIGHT, Parent = top }, "SubText")
+	local chart = new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 136), LayoutOrder = 2, Parent = chartSec.Body })
+	for _, y in ipairs({ 0, 38, 76, 114 }) do
+		self:_Frame({ Position = UDim2.fromOffset(0, y), Size = UDim2.new(1, 0, 0, 1), BackgroundTransparency = y == 114 and 0.2 or 0.65, Parent = chart }, "Stroke")
+	end
+	for i = 1, 8 do
+		local slot = new("Frame", { BackgroundTransparency = 1, Position = UDim2.new((i - 1) / 8, 0, 0, 0), Size = UDim2.new(1 / 8, 0, 0, 114), Parent = chart })
+		local bar = new("Frame", { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, 0), Size = UDim2.new(0.58, 0, 0, 3), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Parent = slot })
+		corner(bar, 5)
+		local bg = new("UIGradient", { Rotation = 90, Parent = bar })
+		self:Bind(bg, { Color = function(c) return ColorSequence.new(c.Accent2, c.Accent) end })
+		local bglow = self:_Stroke(bar, "Accent", 2)
+		bglow.Transparency = 0.8
+		ui.bars[i] = bar
+		self:_Text({ Text = i == 8 and "now" or ("-" .. (8 - i) * 15 .. "s"), TextSize = 10, Position = UDim2.new((i - 1) / 8, 0, 0, 120), Size = UDim2.new(1 / 8, 0, 0, 14), TextXAlignment = CENTER, Parent = chart }, "SubText")
+	end
+
+	-- Quick navigation ---------------------------------------------------------------------------
 	local nav = tab:CreateSection("Quick navigation")
 	local navHolder = new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AUTO_Y, Parent = nav.Body })
-	new("UIGridLayout", { CellPadding = UDim2.fromOffset(8, 8), CellSize = UDim2.new(0.5, -4, 0, 36), SortOrder = Enum.SortOrder.LayoutOrder, Parent = navHolder })
+	new("UIGridLayout", { CellPadding = UDim2.fromOffset(8, 8), CellSize = UDim2.new(0.5, -4, 0, 40), SortOrder = Enum.SortOrder.LayoutOrder, Parent = navHolder })
 	ui.Nav = navHolder
 
-	-- Recent activity
+	-- Recent activity ----------------------------------------------------------------------------
 	local act = tab:CreateSection("Recent activity")
 	local actHolder = new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AUTO_Y, Parent = act.Body })
-	listLayout(actHolder, 6)
+	listLayout(actHolder, 8)
 	ui.Activity = actHolder
 
-	-- Developer & credits
+	-- Developer & credits ------------------------------------------------------------------------
 	local dev = tab:CreateSection("Developer & credits")
 	ui.DevLabel = dev:CreateLabel({ Name = "Developer", Description = self.Developer })
 	ui.CreditsLabel = dev:CreateLabel({ Name = "Credits", Description = self.Credits })
 
-	function tab:SetUsername(name) self.Library.Username = name ui.Username.Text = name end
+	function tab:SetUsername(name)
+		self.Library.Username = name
+		ui.Username.Text = name
+		if self.Library.UserNameLabel then self.Library.UserNameLabel.Text = name end
+	end
 	function tab:SetDescription(text) self.Library.Description = text ui.Desc.Text = text end
 	self:_QueueHome()
 	return tab
@@ -1605,12 +1809,43 @@ function Library:_RefreshHome()
 	local h = self.Home
 	if not h or not h._ui or not h._ui.Theme then return end
 	local ui = h._ui
+	if ui.replay then
+		ui.replay = false
+		for _, l in ipairs({ ui.Tabs, ui.Toggles, ui.ChartTotal }) do l:SetAttribute("count", 0) end
+		for _, b in ipairs(ui.bars) do b.Size = UDim2.new(0.58, 0, 0, 3) end
+		ui.barsReplay = true
+	end
 	ui.Theme.Text = self.ThemeName
-	ui.Tabs.Text = tostring(#self.Tabs)
-	local active = 0
-	for _, t in ipairs(self.Toggles) do if t:Get() then active += 1 end end
-	ui.Toggles.Text = active .. " / " .. #self.Toggles
 	ui.Library.Text = Library.LibraryName .. " v" .. Library.LibraryVersion
+	self:CountTo(ui.Tabs, #self.Tabs)
+	local active, total = 0, #self.Toggles
+	for _, t in ipairs(self.Toggles) do if t:Get() then active += 1 end end
+	self:CountTo(ui.Toggles, active, function(n) return math.floor(n + 0.5) .. " / " .. total end)
+
+	-- Chart: 8 buckets of 15s
+	local now = os.time()
+	local counts, sum = { 0, 0, 0, 0, 0, 0, 0, 0 }, 0
+	for _, t in ipairs(self._events) do
+		local age = now - t
+		if age >= 0 and age < 120 then
+			local idx = 8 - math.floor(age / 15)
+			counts[idx] += 1
+			sum += 1
+		end
+	end
+	local peak = math.max(3, table.unpack(counts))
+	for i, bar in ipairs(ui.bars) do
+		local goal = UDim2.new(0.58, 0, counts[i] / peak * 0.92, 3)
+		if ui.barsReplay then
+			task.delay(i * 0.05, function()
+				if bar.Parent then self:Tween(bar, { Size = goal }, 0.6, Enum.EasingStyle.Back) end
+			end)
+		else
+			self:Tween(bar, { Size = goal }, 0.4)
+		end
+	end
+	ui.barsReplay = false
+	self:CountTo(ui.ChartTotal, sum)
 
 	-- Quick nav (rebuilt only when the tab set changes)
 	if ui.navCount ~= #self._allTabs then
@@ -1620,12 +1855,19 @@ function Library:_RefreshHome()
 			if t ~= h then
 				local b = new("TextButton", { BorderSizePixel = 0, BackgroundColor3 = self.Colors.Surface2, Text = "", AutoButtonColor = false, LayoutOrder = i, Parent = ui.Nav })
 				self:Bind(b, { BackgroundColor3 = "Surface2" })
-				corner(b, 7)
-				self:_Stroke(b, "Stroke")
-				self:_Icon(b, t.Icon, 16, "Accent", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 10, 0.5, 0) })
-				self:_Text({ Text = t.Name, Font = FONT_M, Position = UDim2.fromOffset(36, 0), Size = UDim2.new(1, -44, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd, Parent = b }, "Text")
-				b.MouseEnter:Connect(function() self:Tween(b, { BackgroundColor3 = self.Colors.Hover }, 0.12) end)
-				b.MouseLeave:Connect(function() self:Tween(b, { BackgroundColor3 = self.Colors.Surface2 }, 0.15) end)
+				corner(b, 8)
+				local st = self:_Stroke(b, "Stroke")
+				self:_Icon(b, t.Icon, 16, "Accent", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 14, 0.5, 0) })
+				self:_Text({ Text = t.Name, Font = FONT_M, TextSize = 14, Position = UDim2.fromOffset(42, 0), Size = UDim2.new(1, -72, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd, Parent = b }, "Text")
+				self:_Text({ Text = "›", Font = FONT_B, TextSize = 20, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0), Size = UDim2.fromOffset(16, 24), TextXAlignment = CENTER, Parent = b }, "SubText")
+				b.MouseEnter:Connect(function()
+					self:Tween(b, { BackgroundColor3 = self.Colors.Hover }, 0.12)
+					self:Tween(st, { Color = self.Colors.Accent }, 0.15)
+				end)
+				b.MouseLeave:Connect(function()
+					self:Tween(b, { BackgroundColor3 = self.Colors.Surface2 }, 0.15)
+					self:Tween(st, { Color = self.Colors.Stroke }, 0.2)
+				end)
 				b.Activated:Connect(function() self:SelectTab(t) end)
 			end
 		end
@@ -1642,11 +1884,13 @@ function Library:_RefreshHome()
 		if ph then ph:Destroy() end
 		for i = 1, math.min(#self.Activity, 6) do
 			local a = self.Activity[i]
-			local row = new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 22), LayoutOrder = i, Parent = ui.Activity })
-			local dot = self:_Frame({ AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 0, 0.5, 0), Size = UDim2.fromOffset(8, 8), Parent = row }, a.Kind)
-			corner(dot, 4)
-			self:_Text({ Text = a.Text, Position = UDim2.fromOffset(18, 0), Size = UDim2.new(1, -92, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd, Parent = row }, "Text")
-			self:_Text({ Text = ago(a.Time), TextSize = 11, AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.fromOffset(70, 22), TextXAlignment = RIGHT, Parent = row }, "SubText")
+			local row = new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 24), LayoutOrder = i, Parent = ui.Activity })
+			local ringDot = self:_Frame({ AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 0, 0.5, 0), Size = UDim2.fromOffset(12, 12), BackgroundTransparency = 0.78, Parent = row }, a.Kind)
+			corner(ringDot, 6)
+			local core = self:_Frame({ AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(6, 6), Parent = ringDot }, a.Kind)
+			corner(core, 3)
+			self:_Text({ Text = a.Text, TextSize = 13, Position = UDim2.fromOffset(24, 0), Size = UDim2.new(1, -100, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd, Parent = row }, "Text")
+			self:_Text({ Text = ago(a.Time), TextSize = 11, AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.fromOffset(72, 24), TextXAlignment = RIGHT, Parent = row }, "SubText")
 		end
 	end
 	if ui.DevLabel then
@@ -1656,6 +1900,6 @@ function Library:_RefreshHome()
 end
 
 -- Helpers exposed for custom components
-Library.Util = { new = new, corner = corner, padding = padding, listLayout = listLayout, baseRow = baseRow, finish = finish, buildSlider = buildSlider, fire = fire }
+Library.Util = { new = new, corner = corner, padding = padding, listLayout = listLayout, baseRow = baseRow, finish = finish, buildSlider = buildSlider, fire = fire, pressInset = pressInset }
 
 return Library
