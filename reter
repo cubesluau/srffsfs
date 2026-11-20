@@ -60,11 +60,36 @@ local Status = {
 	Error = Color3.fromRGB(248, 113, 113), Info = Color3.fromRGB(96, 165, 250),
 }
 
--- Built-in glyph icons. Any "rbxassetid://" string / number is also accepted wherever an Icon is used.
+-- Built-in Lucide icons (rbxassetid). Any "rbxassetid://" string / number is also accepted wherever an Icon is used.
 local Glyphs = {
-	home = "⌂", settings = "⚙", info = "ℹ", star = "★", heart = "♥", user = "☺", bolt = "⚡",
-	eye = "◉", list = "☰", play = "▶", shield = "◈", tools = "✎", world = "◍", dot = "●",
-	diamond = "◆", flag = "⚑", check = "✓", music = "♪", sun = "☼", sparkle = "✦", code = "‹›",
+	home        = "rbxassetid://7733960981",
+	settings    = "rbxassetid://7734053495",
+	info        = "rbxassetid://7733964719",
+	star        = "rbxassetid://7734068321",
+	heart       = "rbxassetid://7733956134",
+	user        = "rbxassetid://7743875962",
+	bolt        = "rbxassetid://7734068321",   -- zap/star stand-in
+	eye         = "rbxassetid://7733798691",   -- eye → flag variant (closest available)
+	list        = "rbxassetid://7733970442",   -- layout-list
+	play        = "rbxassetid://7734037784",   -- play-circle
+	shield      = "rbxassetid://7734056608",
+	tools       = "rbxassetid://7743878358",   -- wrench
+	world       = "rbxassetid://7733954760",   -- globe
+	dot         = "rbxassetid://7733919881",   -- circle
+	diamond     = "rbxassetid://7734068321",   -- star (lucide doesn't have diamond in this set)
+	flag        = "rbxassetid://7733798691",
+	check       = "rbxassetid://7733715400",
+	music       = "rbxassetid://7734020554",
+	sun         = "rbxassetid://7734068495",
+	sparkle     = "rbxassetid://7734068258",   -- sparkle
+	code        = "rbxassetid://7733749837",
+	menu        = "rbxassetid://7733993211",
+	pencil      = "rbxassetid://7734022107",
+	["x"]       = "rbxassetid://7743878496",   -- x-circle
+	["alert"]   = "rbxassetid://7733658271",   -- alert-circle
+	["check-c"] = "rbxassetid://7733710700",   -- check-circle
+	["chevron"] = "rbxassetid://7733717755",   -- chevron-right
+	minus       = "rbxassetid://7733993211",   -- minus (using menu icon as stand-in)
 }
 
 --// Utilities ----------------------------------------------------------------------------------
@@ -274,17 +299,19 @@ end
 function Library:_Icon(parent, icon, size, token, props)
 	local inst
 	icon = icon or "dot"
-	local isAsset = type(icon) == "number" or (type(icon) == "string" and icon:find("^rbxasset") ~= nil)
+	-- Resolve glyph name to asset id
+	if Glyphs[icon] then icon = Glyphs[icon] end
+	local isAsset = type(icon) == "number" or (type(icon) == "string" and (icon:find("^rbxasset") ~= nil))
 	if isAsset then
 		inst = new("ImageLabel", {
 			BackgroundTransparency = 1, BorderSizePixel = 0, Size = UDim2.fromOffset(size, size),
 			Image = type(icon) == "number" and ("rbxassetid://" .. icon) or icon,
-			ImageColor3 = self.Colors[token or "Text"], Parent = parent,
+			ImageColor3 = self.Colors[token or "Text"], ScaleType = Enum.ScaleType.Fit, Parent = parent,
 		})
 		self:Bind(inst, { ImageColor3 = token or "Text" })
 	else
 		inst = self:_Text({
-			Text = Glyphs[icon] or tostring(icon), Font = FONT_B, TextSize = size,
+			Text = tostring(icon), Font = FONT_B, TextSize = size,
 			Size = UDim2.fromOffset(size, size), TextXAlignment = CENTER, Parent = parent,
 		}, token)
 	end
@@ -499,22 +526,24 @@ function Library:_BuildGui(opts)
 	self.NameLabel = self:_Text({ Text = self.Name, Font = FONT_B, TextSize = 14, Position = UDim2.fromOffset(56, 9), Size = UDim2.new(1, -150, 0, 18), TextTruncate = Enum.TextTruncate.AtEnd, Parent = title }, "Text")
 	self.SubLabel = self:_Text({ Text = self.Subtitle, TextSize = 11, Position = UDim2.fromOffset(56, 28), Size = UDim2.new(1, -150, 0, 14), TextTruncate = Enum.TextTruncate.AtEnd, Parent = title }, "SubText")
 
-	local function titleButton(glyph, x, hoverToken)
+	local function titleButton(iconKey, x, hoverToken)
 		local b = new("TextButton", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, x, 0.5, 0), Size = UDim2.fromOffset(28, 28), BackgroundColor3 = self.Colors.Hover, BackgroundTransparency = 1, BorderSizePixel = 0, Text = "", AutoButtonColor = false, Parent = title })
 		corner(b, 6)
-		local t = self:_Text({ Text = glyph, Font = FONT_B, TextSize = 18, Size = UDim2.fromScale(1, 1), TextXAlignment = CENTER, Parent = b }, "SubText")
+		local ic = self:_Icon(b, iconKey, 16, "SubText", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5) })
+		local colorProp = ic:IsA("ImageLabel") and "ImageColor3" or "TextColor3"
+		self:Unbind(ic)
 		b.MouseEnter:Connect(function()
 			self:Tween(b, { BackgroundColor3 = self.Colors[hoverToken], BackgroundTransparency = hoverToken == "Error" and 0.8 or 0.3 }, 0.12)
-			self:Tween(t, { TextColor3 = hoverToken == "Error" and self.Colors.Error or self.Colors.Text }, 0.12)
+			self:Tween(ic, { [colorProp] = hoverToken == "Error" and self.Colors.Error or self.Colors.Text }, 0.12)
 		end)
 		b.MouseLeave:Connect(function()
 			self:Tween(b, { BackgroundTransparency = 1 }, 0.15)
-			self:Tween(t, { TextColor3 = self.Colors.SubText }, 0.15)
+			self:Tween(ic, { [colorProp] = self.Colors.SubText }, 0.15)
 		end)
 		return b
 	end
-	local closeBtn = titleButton("×", -10, "Error")
-	local minBtn = titleButton("–", -42, "Hover")
+	local closeBtn = titleButton("x", -10, "Error")
+	local minBtn = titleButton("minus", -42, "Hover")
 	closeBtn.Activated:Connect(function()
 		self:SetVisible(false)
 		if not self.UseLauncher then
@@ -559,8 +588,9 @@ function Library:_BuildGui(opts)
 
 	-- Resize grip
 	local grip = new("TextButton", { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -3, 1, -3), Size = UDim2.fromOffset(18, 18), BackgroundTransparency = 1, Text = "", ZIndex = 20, Parent = main })
-	local gl = self:_Text({ Text = "◢", TextSize = 12, Size = UDim2.fromScale(1, 1), TextXAlignment = CENTER, ZIndex = 20, Parent = grip }, "SubText")
-	gl.TextTransparency = 0.4
+	local gripIcon = self:_Icon(grip, "chevron", 12, "SubText", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Rotation = 45, ZIndex = 20 })
+	if gripIcon:IsA("ImageLabel") then gripIcon.ImageTransparency = 0.4
+	else gripIcon.TextTransparency = 0.4 end
 	self.Grip = grip
 	grip.InputBegan:Connect(function(input)
 		if not isPress(input) then return end
@@ -585,7 +615,8 @@ function Library:_BuildGui(opts)
 	self:Bind(launcher, { BackgroundColor3 = "Surface" })
 	corner(launcher, 17)
 	self:_Stroke(launcher, "Accent")
-	self:_Text({ Text = "☰  " .. self.Name, Font = FONT_M, Size = UDim2.fromScale(1, 1), TextXAlignment = CENTER, TextTruncate = Enum.TextTruncate.AtEnd, Parent = launcher }, "Text")
+	self:_Icon(launcher, "menu", 16, "Text", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.fromOffset(14, 17) })
+	self:_Text({ Text = self.Name, Font = FONT_M, Size = UDim2.new(1, -40, 1, 0), Position = UDim2.fromOffset(36, 0), TextXAlignment = CENTER, TextTruncate = Enum.TextTruncate.AtEnd, Parent = launcher }, "Text")
 	launcher.Activated:Connect(function() self:SetVisible(true) end)
 	self.Launcher = launcher
 
@@ -668,7 +699,7 @@ function Library:Log(text, kind)
 end
 
 --// Notifications ------------------------------------------------------------------------------
-local NotifGlyph = { Success = "✓", Warning = "!", Error = "×", Info = "i" }
+local NotifGlyph = { Success = "check-c", Warning = "alert", Error = "x", Info = "info" }
 
 function Library:Notify(opts)
 	if type(opts) == "string" then opts = { Title = opts } end
@@ -691,7 +722,7 @@ function Library:Notify(opts)
 	if opts.Icon then
 		self:_Icon(badge, opts.Icon, 14, kind, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5) })
 	else
-		self:_Text({ Text = NotifGlyph[kind], Font = FONT_B, TextSize = 15, Size = UDim2.fromScale(1, 1), TextXAlignment = CENTER, Parent = badge }, kind)
+		self:_Icon(badge, NotifGlyph[kind], 14, kind, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5) })
 	end
 	local tf = new("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(34, 0), Size = UDim2.new(1, -34, 0, 0), AutomaticSize = AUTO_Y, Parent = body })
 	listLayout(tf, 2)
@@ -1173,7 +1204,7 @@ Components.Dropdown = function(section, opts)
 	corner(chip, 8)
 	lib:_Stroke(chip, "Stroke")
 	local chipText = lib:_Text({ TextSize = 12, Position = UDim2.fromOffset(8, 0), Size = UDim2.new(1, -28, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd, Parent = chip }, "Text")
-	local arrow = lib:_Text({ Text = "▾", TextSize = 13, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(1, -12, 0.5, 0), Size = UDim2.fromOffset(18, 18), TextXAlignment = CENTER, Parent = chip }, "SubText")
+	local arrow = lib:_Icon(chip, "chevron", 14, "SubText", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(1, -12, 0.5, 0), Rotation = 90 })
 
 	r.Row.ClipsDescendants = false
 	local drawer = new("Frame", { BackgroundTransparency = 1, ClipsDescendants = true, Size = UDim2.new(1, 0, 0, 0), Parent = r.Extra })
@@ -1240,7 +1271,7 @@ Components.Dropdown = function(section, opts)
 			corner(btn, 8)
 			local label = lib:_Text({ Text = tostring(name), Position = UDim2.fromOffset(10, 0), Size = UDim2.new(1, -34, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd, Parent = btn }, "Text")
 			lib:Unbind(label)
-			local check = lib:_Text({ Text = "✓", Font = FONT_B, Position = UDim2.new(1, -24, 0, 0), Size = UDim2.fromOffset(18, 26), TextXAlignment = CENTER, Visible = false, Parent = btn }, "Accent")
+			local check = lib:_Icon(btn, "check", 14, "Accent", { Position = UDim2.new(1, -24, 0.5, -7), Visible = false })
 			btn.MouseEnter:Connect(function() if btn.BackgroundTransparency == 1 then lib:Tween(btn, { BackgroundColor3 = lib.Colors.Hover, BackgroundTransparency = 0.4 }, 0.1) end end)
 			btn.MouseLeave:Connect(function() refreshStyles() end)
 			btn.Activated:Connect(function() choose(name) end)
@@ -1259,7 +1290,7 @@ Components.Dropdown = function(section, opts)
 
 	setOpen = function(v)
 		isOpen = v
-		lib:Tween(arrow, { Rotation = v and 180 or 0 }, 0.2)
+		lib:Tween(arrow, { Rotation = v and 270 or 90 }, 0.2)
 		if v then
 			r.Extra.Visible = true
 			lib:Tween(drawer, { Size = UDim2.new(1, 0, 0, totalHeight()) }, 0.25)
@@ -1859,7 +1890,7 @@ function Library:_RefreshHome()
 				local st = self:_Stroke(b, "Stroke")
 				self:_Icon(b, t.Icon, 16, "Accent", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 14, 0.5, 0) })
 				self:_Text({ Text = t.Name, Font = FONT_M, TextSize = 14, Position = UDim2.fromOffset(42, 0), Size = UDim2.new(1, -72, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd, Parent = b }, "Text")
-				self:_Text({ Text = "›", Font = FONT_B, TextSize = 20, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0), Size = UDim2.fromOffset(16, 24), TextXAlignment = CENTER, Parent = b }, "SubText")
+				self:_Icon(b, "chevron", 16, "SubText", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0) })
 				b.MouseEnter:Connect(function()
 					self:Tween(b, { BackgroundColor3 = self.Colors.Hover }, 0.12)
 					self:Tween(st, { Color = self.Colors.Accent }, 0.15)
